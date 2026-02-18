@@ -1,4 +1,4 @@
-// OpenClaw Browser Extension with Virtual Cursor & Auto-Update
+// OpenClaw Browser Extension with Virtual Cursor, Auto-Update & Element Extraction
 
 var CONFIG = { gatewayUrl: "http://195.35.36.249:8081", gatewayToken: "0028221d60abf79b49491972e6b7c08355dfd39b8377d372" };
 var STORAGE_KEYS = { gatewayUrl: 'openclaw_gatewayUrl', gatewayToken: 'openclaw_gatewayToken' };
@@ -6,8 +6,8 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
-var currentVersion = "1.0.0";
-var UPDATE_CHECK_INTERVAL = 3600000; // Check every hour
+var currentVersion = "1.0.2";
+var UPDATE_CHECK_INTERVAL = 3600000;
 
 // Auto-update function
 function checkForUpdates() {
@@ -17,7 +17,6 @@ function checkForUpdates() {
       var latestVersion = data.tag_name ? data.tag_name.replace('v', '') : '1.0.0';
       if (compareVersions(latestVersion, currentVersion) > 0) {
         sendNotification('Update Available', 'v' + latestVersion + ' - Click to update');
-        // In a full implementation, would download and install the update
       }
     })
     .catch(function() {});
@@ -35,8 +34,7 @@ function compareVersions(v1, v2) {
   return 0;
 }
 
-// Schedule update check
-setTimeout(checkForUpdates, 5000); // Check 5 seconds after startup
+setTimeout(checkForUpdates, 5000);
 setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL);
 
 function showOverlay(tabId, status, command) {
@@ -193,7 +191,8 @@ function getStatusMessage(command) {
     'press_key': 'Pressing key...', 'screenshot': 'Capturing...', 'get_url': 'Getting URL...',
     'get_title': 'Getting title...', 'get_tabs': 'Listing tabs...',
     'open_tab': 'Opening tab...', 'close_tab': 'Closing tab...',
-    'activate_tab': 'Switching tab...', 'extract_page': 'Extracting...'
+    'activate_tab': 'Switching tab...', 'extract_page': 'Extracting...',
+    'extract_elements': 'Finding elements...'
   };
   return messages[command] || 'Processing...';
 }
@@ -313,6 +312,89 @@ function executeCommand(command, params, targetTab, callback) {
     case 'get_tabs':
       chrome.tabs.query({ currentWindow: true }, function(tabs) {
         callback({ tabs: tabs.map(function(t) { return { id: t.id, url: t.url, title: t.title ? t.title.substring(0, 50) : '', active: t.active }; }) });
+      });
+      break;
+    case 'extract_elements':
+      chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: function() {
+          var elements = [];
+          var seen = new Set();
+          
+          // Find inputs
+          var inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), textarea, select');
+          for (var i = 0; i < inputs.length; i++) {
+            var el = inputs[i];
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 5 && rect.height > 5) {
+              var id = el.id || el.name || el.placeholder || '';
+              if (!seen.has(el.tagName + id)) {
+                seen.add(el.tagName + id);
+                elements.push({
+                  type: el.tagName.toLowerCase(),
+                  tag: el.tagName.toLowerCase(),
+                  id: el.id || null,
+                  name: el.name || null,
+                  placeholder: el.placeholder || null,
+                  type_attr: el.type || null,
+                  selector: el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : null),
+                  text: el.value || null,
+                  visible: rect.width > 0 && rect.height > 0
+                });
+              }
+            }
+          }
+          
+          // Find buttons and links
+          var buttons = document.querySelectorAll('button, a[href], [role="button"], [onclick]');
+          for (var j = 0; j < buttons.length; j++) {
+            var btn = buttons[j];
+            var r = btn.getBoundingClientRect();
+            if (r.width > 5 && r.height > 5) {
+              var text = btn.textContent.trim().substring(0, 50);
+              var btnId = btn.id || '';
+              if (!seen.has(btn.tagName + text + btnId)) {
+                seen.add(btn.tagName + text + btnId);
+                elements.push({
+                  type: btn.tagName.toLowerCase() === 'a' ? 'link' : 'button',
+                  tag: btn.tagName.toLowerCase(),
+                  id: btn.id || null,
+                  href: btn.href || null,
+                  text: text,
+                  selector: btn.id ? '#' + btn.id : null,
+                  visible: r.width > 0 && r.height > 0
+                });
+              }
+            }
+          }
+          
+          return { elements: elements.slice(0, 50) };
+        }
+      }, function(results) {
+        var r = results && results[0] ? results[0].result : null;
+        if (r && r.elements) {
+          sendNotification('Elements Found', r.elements.length + ' interactable elements');
+          callback({ success: true, elements: r.elements, count: r.elements.length });
+        } else {
+          callback({ error: 'Failed to extract elements' });
+        }
+      });
+      break;
+    case 'extract_page':
+      chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: function() {
+          return {
+            title: document.title,
+            url: window.location.href,
+            headings: Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10).map(function(h) { return { level: h.tagName, text: h.textContent.trim() }; }),
+            links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(function(a) { return { text: a.textContent.trim().substring(0, 100), href: a.href }; }),
+            text: document.body.innerText.substring(0, 5000)
+          };
+        }
+      }, function(results) {
+        var r = results && results[0] ? results[0].result : null;
+        callback(r || { error: 'Script failed' });
       });
       break;
     case 'open_tab':
