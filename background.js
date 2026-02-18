@@ -1,4 +1,4 @@
-// OpenClaw Browser Extension v1.2.0
+// OpenClaw Browser Extension v1.3.0
 
 var CONFIG = { gatewayUrl: "http://195.35.36.249:8081", gatewayToken: "0028221d60abf79b49491972e6b7c08355dfd39b8377d372" };
 var STORAGE_KEYS = { gatewayUrl: 'openclaw_gatewayUrl', gatewayToken: 'openclaw_gatewayToken' };
@@ -6,7 +6,7 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
-var currentVersion = "1.2.0";
+var currentVersion = "1.3.0";
 var UPDATE_CHECK_INTERVAL = 3600000;
 
 function checkForUpdates() {
@@ -82,7 +82,7 @@ function showIndicator(tabId, commands) {
         
         indicator.innerHTML = '<div style="position:fixed;bottom:20px;right:20px;background:rgba(15,15,25,0.96);border:1px solid rgba(139,92,246,0.6);border-radius:10px;padding:12px 16px;font-family:sans-serif;z-index:2147483647;box-shadow:0 8px 32px rgba(0,0,0,0.4);min-width:140px;">' +
           '<div style="display:flex;align-items:center;gap:8px;margin-bottom:' + (cmds.length ? '10px' : '0') + ';">' +
-          '<div style="width:10px;height:10px;background:' + (connected ? '#22c55e' : '#64748b') + ';border-radius:50%;animation:' + (connected ? 'pulse 2s infinite' : 'none') + ';box-shadow:0 0 8px ' + (connected ? '#22c55e' : '#64748b') + ';"></div>' +
+          '<div style="width:10px;height:10px;background:' + (connected ? '#22c55e' : '#64748b') + ';border-radius:50%;animation:' + (connected ? 'pulse 2s infinite' : 'none') + ';"></div>' +
           '<div style="color:#a78bfa;font-size:12px;font-weight:700;">OPENCLAW</div></div>' +
           cmdHtml + '</div><style>@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.7;transform:scale(1.1);}}</style>';
         document.body.appendChild(indicator);
@@ -205,9 +205,8 @@ function executeCommand(command, params, targetTab, callback) {
       chrome.tabs.update(targetTab.id, { url: url }, function() {
         sendNotification('Navigated', url.substring(0, 50));
         setTimeout(function() {
-          // Auto-extract elements after navigation
           extractElementsFromTab(targetTab.id, function(elResult) {
-            callback({ success: true, url: url, elements: elResult.elements || [] });
+            callback({ success: true, url: url, elements: elResult.elements || [], count: elResult.count || 0 });
           });
         }, 2000);
       });
@@ -215,19 +214,24 @@ function executeCommand(command, params, targetTab, callback) {
     case 'click':
       chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
-        func: function(selector, text) {
+        func: function(id, selector, text) {
           var el = null;
           
-          // If selector provided, use it
-          if (selector) {
+          // Try ID first (most reliable)
+          if (id) {
+            el = document.getElementById(id);
+          }
+          
+          // Try CSS selector
+          if (!el && selector) {
             el = document.querySelector(selector);
           }
           
-          // If text provided, find element by text content
+          // Try text content
           if (!el && text) {
             var allElements = document.querySelectorAll('button, a, [role="button"], [role="link"]');
             for (var i = 0; i < allElements.length; i++) {
-              var t = allElements[i].textContent || '';
+              var t = (allElements[i].textContent || '').trim();
               if (t.toLowerCase().includes(text.toLowerCase())) {
                 el = allElements[i];
                 break;
@@ -236,7 +240,7 @@ function executeCommand(command, params, targetTab, callback) {
           }
           
           if (!el) {
-            return { error: selector ? 'Not found: ' + selector : 'Text not found: ' + text };
+            return { error: 'Element not found' };
           }
           
           var rect = el.getBoundingClientRect();
@@ -263,14 +267,15 @@ function executeCommand(command, params, targetTab, callback) {
           }, 200);
           
           el.click();
-          return { success: true, x: centerX, y: centerY, text: el.textContent.trim().substring(0, 30) };
+          return { success: true, x: centerX, y: centerY, text: (el.textContent || '').trim().substring(0, 30), id: el.id };
         },
-        args: [params.selector || null, params.text || null]
+        args: [params.id || null, params.selector || null, params.text || null]
       }, function(results) {
         var r = results && results[0] ? results[0].result : null;
         if (r && r.success) {
           cursorPosition = { x: r.x, y: r.y, visible: true };
-          sendNotification('Clicked', r.text || params.selector || params.text);
+          var desc = r.id ? '#' + r.id : (params.text || params.selector || '');
+          sendNotification('Clicked', desc);
         }
         callback(r || { error: 'Script failed' });
       });
@@ -449,30 +454,50 @@ function extractElementsFromTab(tabId, callback) {
       var elements = [];
       var seen = new Set();
       
-      // Find inputs
+      // Helper to get aria properties
+      function getAriaProps(el) {
+        var aria = {};
+        if (el.getAttribute('aria-label')) aria.label = el.getAttribute('aria-label');
+        if (el.getAttribute('aria-expanded')) aria.expanded = el.getAttribute('aria-expanded');
+        if (el.getAttribute('aria-hidden')) aria.hidden = el.getAttribute('aria-hidden');
+        if (el.getAttribute('aria-pressed')) aria.pressed = el.getAttribute('aria-pressed');
+        if (el.getAttribute('aria-disabled')) aria.disabled = el.getAttribute('aria-disabled');
+        if (el.getAttribute('aria-describedby')) aria.describedBy = el.getAttribute('aria-describedby');
+        if (el.getAttribute('aria-haspopup')) aria.hasPopup = el.getAttribute('aria-haspopup');
+        if (el.getAttribute('aria-current')) aria.current = el.getAttribute('aria-current');
+        if (el.getAttribute('role')) aria.role = el.getAttribute('role');
+        return Object.keys(aria).length > 0 ? aria : null;
+      }
+      
+      // Find inputs with full details
       var inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), textarea, select');
       for (var i = 0; i < inputs.length; i++) {
         var el = inputs[i];
         var rect = el.getBoundingClientRect();
         if (rect.width > 5 && rect.height > 5) {
-          var id = el.id || el.name || el.placeholder || '';
-          if (!seen.has(el.tagName + id)) {
-            seen.add(el.tagName + id);
+          var key = el.tagName + (el.id || el.name || el.placeholder || '');
+          if (!seen.has(key)) {
+            seen.add(key);
+            var selector = el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : null);
             elements.push({
               type: 'input',
               tag: el.tagName.toLowerCase(),
               id: el.id || null,
               name: el.name || null,
               placeholder: el.placeholder || null,
-              selector: el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : null),
-              text: el.value || null,
-              visible: true
+              type_attr: el.type || null,
+              value: el.value || null,
+              className: el.className ? el.className.split(' ').slice(0, 3).join(' ') : null,
+              selector: selector,
+              clickSelector: el.id ? '#' + el.id : selector,
+              aria: getAriaProps(el),
+              visible: rect.width > 0 && rect.height > 0
             });
           }
         }
       }
       
-      // Find buttons and links with text
+      // Find buttons and links with full details
       var buttons = document.querySelectorAll('button, a[href], [role="button"]');
       for (var j = 0; j < buttons.length; j++) {
         var btn = buttons[j];
@@ -480,17 +505,21 @@ function extractElementsFromTab(tabId, callback) {
         if (r.width > 5 && r.height > 5) {
           var text = (btn.textContent || '').trim().substring(0, 50);
           if (text) {
-            var key = btn.tagName + text;
-            if (!seen.has(key)) {
-              seen.add(key);
+            var btnKey = btn.tagName + text + (btn.id || '');
+            if (!seen.has(btnKey)) {
+              seen.add(btnKey);
+              var btnSelector = btn.id ? '#' + btn.id : null;
               elements.push({
                 type: btn.tagName.toLowerCase() === 'a' ? 'link' : 'button',
                 tag: btn.tagName.toLowerCase(),
                 id: btn.id || null,
                 href: btn.href || null,
                 text: text,
-                selector: btn.id ? '#' + btn.id : '[text*="' + text + '"]',
-                visible: true
+                className: btn.className ? btn.className.split(' ').slice(0, 3).join(' ') : null,
+                selector: btnSelector,
+                clickSelector: btn.id ? '#' + btn.id : '[text*="' + text + '"]',
+                aria: getAriaProps(btn),
+                visible: r.width > 0 && r.height > 0
               });
             }
           }
