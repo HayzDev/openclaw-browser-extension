@@ -6,7 +6,7 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
-var currentVersion = "1.1.0";
+var currentVersion = "1.1.1";
 var UPDATE_CHECK_INTERVAL = 3600000;
 
 // Auto-update function
@@ -402,7 +402,6 @@ function executeCommand(command, params, targetTab, callback) {
         
         extractBookmarks(bookmarkTreeNodes);
         
-        // Filter to first 100 bookmarks for response size
         var displayBookmarks = allBookmarks.slice(0, 100).map(function(b, idx) {
           return {
             index: idx + 1,
@@ -423,26 +422,36 @@ function executeCommand(command, params, targetTab, callback) {
     case 'go_to_bookmark':
       var bookmarkId = params.id;
       var bookmarkUrl = params.url;
+      var mode = params.mode || 'foreground'; // current, background, foreground
+      
+      function openUrl(url, activate) {
+        if (mode === 'current') {
+          // Replace current tab
+          chrome.tabs.update(targetTab.id, { url: url }, function() {
+            sendNotification('Bookmark', 'Opened in current tab');
+            callback({ success: true, tabId: targetTab.id, url: url, mode: 'current' });
+          });
+        } else {
+          // New tab
+          var newActive = (mode === 'foreground');
+          chrome.tabs.create({ url: url, active: newActive }, function(newTab) {
+            controlledTabId = newTab.id;
+            sendNotification('Bookmark', 'Opened in ' + (newActive ? 'foreground' : 'background') + ' tab');
+            callback({ success: true, tabId: newTab.id, url: url, mode: mode });
+          });
+        }
+      }
       
       if (bookmarkId) {
         chrome.bookmarks.get(bookmarkId, function(bookmarkNodes) {
           if (bookmarkNodes && bookmarkNodes[0] && bookmarkNodes[0].url) {
-            var url = bookmarkNodes[0].url;
-            chrome.tabs.create({ url: url, active: params.active !== false }, function(newTab) {
-              controlledTabId = newTab.id;
-              sendNotification('Bookmark Opened', bookmarkNodes[0].title);
-              callback({ success: true, tabId: newTab.id, url: url, title: bookmarkNodes[0].title });
-            });
+            openUrl(bookmarkNodes[0].url, params.active);
           } else {
             callback({ error: 'Bookmark not found or has no URL' });
           }
         });
       } else if (bookmarkUrl) {
-        chrome.tabs.create({ url: bookmarkUrl, active: params.active !== false }, function(newTab) {
-          controlledTabId = newTab.id;
-          sendNotification('Bookmark Opened', bookmarkUrl);
-          callback({ success: true, tabId: newTab.id, url: bookmarkUrl });
-        });
+        openUrl(bookmarkUrl, params.active);
       } else {
         callback({ error: 'Missing bookmark id or url' });
       }
@@ -467,9 +476,10 @@ function executeCommand(command, params, targetTab, callback) {
     case 'open_tab':
       var navUrl = params.url;
       if (navUrl.indexOf('http') !== 0) navUrl = 'https://' + navUrl;
-      chrome.tabs.create({ url: navUrl, active: false, index: 9999 }, function(newTab) {
+      var isActive = params.active !== false;
+      chrome.tabs.create({ url: navUrl, active: isActive, index: 9999 }, function(newTab) {
         controlledTabId = newTab.id;
-        sendNotification('New Tab (Background)', navUrl.substring(0, 50));
+        sendNotification('New Tab', navUrl.substring(0, 50));
         setTimeout(function() { showIndicator(newTab.id, []); }, 1500);
         callback({ success: true, tabId: newTab.id });
       });
