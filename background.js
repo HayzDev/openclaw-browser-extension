@@ -1,4 +1,4 @@
-// OpenClaw Browser Extension with Virtual Cursor
+// OpenClaw Browser Extension with Virtual Cursor & Auto-Update
 
 var CONFIG = { gatewayUrl: "http://195.35.36.249:8081", gatewayToken: "0028221d60abf79b49491972e6b7c08355dfd39b8377d372" };
 var STORAGE_KEYS = { gatewayUrl: 'openclaw_gatewayUrl', gatewayToken: 'openclaw_gatewayToken' };
@@ -6,6 +6,38 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
+var currentVersion = "1.0.0";
+var UPDATE_CHECK_INTERVAL = 3600000; // Check every hour
+
+// Auto-update function
+function checkForUpdates() {
+  fetch('https://api.github.com/repos/HayzDev/openclaw-browser-extension/releases/latest')
+    .then(function(response) { return response.json(); })
+    .then(function(data) {
+      var latestVersion = data.tag_name ? data.tag_name.replace('v', '') : '1.0.0';
+      if (compareVersions(latestVersion, currentVersion) > 0) {
+        sendNotification('Update Available', 'v' + latestVersion + ' - Click to update');
+        // In a full implementation, would download and install the update
+      }
+    })
+    .catch(function() {});
+}
+
+function compareVersions(v1, v2) {
+  var parts1 = v1.split('.').map(Number);
+  var parts2 = v2.split('.').map(Number);
+  for (var i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    var p1 = parts1[i] || 0;
+    var p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
+}
+
+// Schedule update check
+setTimeout(checkForUpdates, 5000); // Check 5 seconds after startup
+setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL);
 
 function showOverlay(tabId, status, command) {
   chrome.tabs.get(tabId, function(tab) {
@@ -89,7 +121,8 @@ chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
 function handleMessage(message, callback) {
   var type = message.type, command = message.command, params = message.params || {};
   try {
-    if (type === 'getStatus') { callback({ connected: isConnected, controlledTab: controlledTabId, cursor: cursorPosition }); return; }
+    if (type === 'getStatus') { callback({ connected: isConnected, controlledTab: controlledTabId, cursor: cursorPosition, version: currentVersion }); return; }
+    if (type === 'checkUpdate') { checkForUpdates(); callback({ success: true, version: currentVersion }); return; }
     if (type === 'settingsUpdated') { stopPolling(); loadSettings(function() { startPolling(); callback({ success: true }); }); return; }
     if (type === 'command') { handleCommand(command, params, callback); return; }
     callback({ error: 'Unknown type' });
