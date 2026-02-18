@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>OpenClaw Browser - Settings</title>
+  <style>
+    body {
+      width: 400px;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    
+    h2 {
+      margin-bottom: 20px;
+    }
+    
+    .field {
+      margin-bottom: 16px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: #888;
+    }
+    
+    input {
+      width: 100%;
+      background: #252542;
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 10px;
+      color: #eee;
+      font-size: 14px;
+    }
+    
+    input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+    
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border: none;
+      border-radius: 8px;
+      padding: 12px 20px;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 12px;
+    }
+    
+    button:hover {
+      opacity: 0.9;
+    }
+    
+    .test-result {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    
+    .test-result.success {
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+    }
+    
+    .test-result.error {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+    
+    .help {
+      margin-top: 20px;
+      padding: 12px;
+      background: #252542;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #888;
+    }
+    
+    .help a {
+      color: #667eea;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <h2>⚙️ OpenClaw Browser Settings</h2>
+  
+  <div class="field">
+    <label>Gateway WebSocket URL</label>
+    <input type="text" id="gatewayUrl" placeholder="wss://your-vps-url:port">
+  </div>
+  
+  <div class="field">
+    <label>Gateway Token</label>
+    <input type="password" id="gatewayToken" placeholder="Your gateway token">
+  </div>
+  
+  <button id="testBtn">Save & Test Connection</button>
+  <div id="testResult"></div>
+  
+  <div class="help">
+    <strong>How to get these:</strong><br>
+    1. Your Gateway URL: Check OpenClaw dashboard or run <code>openclaw gateway status</code><br>
+    2. Token: Run <code>cat ~/.config/openclaw/token</code> on your machine<br>
+    <br>
+    <strong>Note:</strong> Copy the token from your terminal and paste it here.
+  </div>
+  
+  <script src="options.js"></script>
+</body>
+</html>

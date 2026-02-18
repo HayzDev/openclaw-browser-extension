@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "OpenClaw Browser Control",
+  "version": "5.0.0",
+  "description": "Browser control with overlay + notifications",
+  "permissions": [
+    "activeTab",
+    "tabs", 
+    "storage",
+    "scripting",
+    "notifications"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" },
+  "icons": {
+    "16": "icons/icon.svg",
+    "48": "icons/icon.svg",
+    "128": "icons/icon.svg"
+  },
+  "options_page": "options.html"
+}
