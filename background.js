@@ -1,4 +1,4 @@
-// OpenClaw Browser Extension v1.3.0
+// OpenClaw Browser Extension v1.4.0
 
 var CONFIG = { gatewayUrl: "http://195.35.36.249:8081", gatewayToken: "0028221d60abf79b49491972e6b7c08355dfd39b8377d372" };
 var STORAGE_KEYS = { gatewayUrl: 'openclaw_gatewayUrl', gatewayToken: 'openclaw_gatewayToken' };
@@ -6,7 +6,7 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
-var currentVersion = "1.3.0";
+var currentVersion = "1.4.0";
 var UPDATE_CHECK_INTERVAL = 3600000;
 
 function checkForUpdates() {
@@ -192,7 +192,8 @@ function getStatusMessage(command) {
     'open_tab': 'Opening tab...', 'close_tab': 'Closing tab...',
     'activate_tab': 'Switching tab...', 'extract_page': 'Extracting...',
     'extract_elements': 'Finding elements...', 'list_bookmarks': 'Listing bookmarks...',
-    'go_to_bookmark': 'Opening bookmark...'
+    'go_to_bookmark': 'Opening bookmark...', 'refresh': 'Refreshing page...',
+    'wait_for': 'Waiting...'
   };
   return messages[command] || 'Processing...';
 }
@@ -208,7 +209,7 @@ function executeCommand(command, params, targetTab, callback) {
           extractElementsFromTab(targetTab.id, function(elResult) {
             callback({ success: true, url: url, elements: elResult.elements || [], count: elResult.count || 0 });
           });
-        }, 2000);
+        }, params.wait || 3000);
       });
       break;
     case 'click':
@@ -216,32 +217,16 @@ function executeCommand(command, params, targetTab, callback) {
         target: { tabId: targetTab.id },
         func: function(id, selector, text) {
           var el = null;
-          
-          // Try ID first (most reliable)
-          if (id) {
-            el = document.getElementById(id);
-          }
-          
-          // Try CSS selector
-          if (!el && selector) {
-            el = document.querySelector(selector);
-          }
-          
-          // Try text content
+          if (id) { el = document.getElementById(id); }
+          if (!el && selector) { el = document.querySelector(selector); }
           if (!el && text) {
-            var allElements = document.querySelectorAll('button, a, [role="button"], [role="link"]');
+            var allElements = document.querySelectorAll('button, a, [role="button"]');
             for (var i = 0; i < allElements.length; i++) {
               var t = (allElements[i].textContent || '').trim();
-              if (t.toLowerCase().includes(text.toLowerCase())) {
-                el = allElements[i];
-                break;
-              }
+              if (t.toLowerCase().includes(text.toLowerCase())) { el = allElements[i]; break; }
             }
           }
-          
-          if (!el) {
-            return { error: 'Element not found' };
-          }
+          if (!el) { return { error: 'Element not found' }; }
           
           var rect = el.getBoundingClientRect();
           var centerX = rect.left + rect.width / 2 - 12;
@@ -256,15 +241,8 @@ function executeCommand(command, params, targetTab, callback) {
           cursor.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5.5 3.21V20.79C5.5 21.4 5.9 21.9 6.5 22H10C10.55 22 11 21.55 11 21V12C11 11.45 11.45 11 12 11H13.5L8.5 6C8.1 5.6 8.1 5 8.5 4.5L13.5 0.5C14 0.1 14.5 0.5 14.5 1L18 4.5C18.5 5 18.5 5.6 18.1 6L10.5 13.5C10.45 13.55 10.45 13.55 10.45 13.55C10.45 13.95 10.05 14.05 9.65 13.65L5 9C4.45 8.55 4.45 7.95 5 7.5L5.5 3.21Z" fill="#a78bfa" stroke="#a78bfa" stroke-width="2"/></svg>';
           document.body.appendChild(cursor);
           
-          setTimeout(function() {
-            var c = document.getElementById('openclaw-cursor');
-            if (c) c.style.transform = 'scale(1.3)';
-          }, 50);
-          
-          setTimeout(function() {
-            var c = document.getElementById('openclaw-cursor');
-            if (c) c.style.transform = 'scale(1)';
-          }, 200);
+          setTimeout(function() { var c = document.getElementById('openclaw-cursor'); if (c) c.style.transform = 'scale(1.3)'; }, 50);
+          setTimeout(function() { var c = document.getElementById('openclaw-cursor'); if (c) c.style.transform = 'scale(1)'; }, 200);
           
           el.click();
           return { success: true, x: centerX, y: centerY, text: (el.textContent || '').trim().substring(0, 30), id: el.id };
@@ -342,9 +320,24 @@ function executeCommand(command, params, targetTab, callback) {
       });
       break;
     case 'extract_elements':
-      extractElementsFromTab(targetTab.id, function(result) {
-        callback(result);
+      extractElementsFromTab(targetTab.id, function(result) { callback(result); });
+      break;
+    case 'refresh':
+      chrome.tabs.reload(targetTab.id, function() {
+        sendNotification('Page Refreshed', 'Waiting for content...');
+        setTimeout(function() {
+          extractElementsFromTab(targetTab.id, function(elResult) {
+            callback({ success: true, elements: elResult.elements || [], count: elResult.count || 0 });
+          });
+        }, params.wait || 3000);
       });
+      break;
+    case 'wait_for':
+      setTimeout(function() {
+        extractElementsFromTab(targetTab.id, function(elResult) {
+          callback({ success: true, elements: elResult.elements || [], count: elResult.count || 0 });
+        });
+      }, params.seconds ? params.seconds * 1000 : 2000);
       break;
     case 'list_bookmarks':
       chrome.bookmarks.getTree(function(bookmarkTreeNodes) {
@@ -352,9 +345,7 @@ function executeCommand(command, params, targetTab, callback) {
         function extractBookmarks(nodes) {
           for (var i = 0; i < nodes.length; i++) {
             var node = nodes[i];
-            if (node.url) {
-              allBookmarks.push({ id: node.id, title: node.title, url: node.url, parentId: node.parentId });
-            }
+            if (node.url) { allBookmarks.push({ id: node.id, title: node.title, url: node.url, parentId: node.parentId }); }
             if (node.children) extractBookmarks(node.children);
           }
         }
@@ -393,6 +384,22 @@ function executeCommand(command, params, targetTab, callback) {
         openUrl(params.url, params.active);
       } else { callback({ error: 'Missing bookmark id or url' }); }
       break;
+    case 'extract_page':
+      chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: function() {
+          return {
+            title: document.title,
+            url: window.location.href,
+            headings: Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10).map(function(h) { return { level: h.tagName, text: h.textContent.trim() }; }),
+            links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(function(a) { return { text: a.textContent.trim().substring(0, 100), href: a.href }; }),
+            text: document.body.innerText.substring(0, 5000)
+          };
+        }
+      }, function(results) {
+        callback((results && results[0] ? results[0].result : null) || { error: 'Script failed' });
+      });
+      break;
     case 'open_tab':
       var navUrl = params.url;
       if (navUrl.indexOf('http') !== 0) navUrl = 'https://' + navUrl;
@@ -405,7 +412,7 @@ function executeCommand(command, params, targetTab, callback) {
             result.tabId = newTab.id;
             callback(result);
           });
-        }, 2000);
+        }, params.wait || 3000);
       });
       break;
     case 'close_tab':
@@ -427,22 +434,6 @@ function executeCommand(command, params, targetTab, callback) {
         });
       });
       break;
-    case 'extract_page':
-      chrome.scripting.executeScript({
-        target: { tabId: targetTab.id },
-        func: function() {
-          return {
-            title: document.title,
-            url: window.location.href,
-            headings: Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10).map(function(h) { return { level: h.tagName, text: h.textContent.trim() }; }),
-            links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(function(a) { return { text: a.textContent.trim().substring(0, 100), href: a.href }; }),
-            text: document.body.innerText.substring(0, 5000)
-          };
-        }
-      }, function(results) {
-        callback((results && results[0] ? results[0].result : null) || { error: 'Script failed' });
-      });
-      break;
     default: callback({ error: 'Unknown command' });
   }
 }
@@ -454,7 +445,6 @@ function extractElementsFromTab(tabId, callback) {
       var elements = [];
       var seen = new Set();
       
-      // Helper to get aria properties
       function getAriaProps(el) {
         var aria = {};
         if (el.getAttribute('aria-label')) aria.label = el.getAttribute('aria-label');
@@ -462,14 +452,10 @@ function extractElementsFromTab(tabId, callback) {
         if (el.getAttribute('aria-hidden')) aria.hidden = el.getAttribute('aria-hidden');
         if (el.getAttribute('aria-pressed')) aria.pressed = el.getAttribute('aria-pressed');
         if (el.getAttribute('aria-disabled')) aria.disabled = el.getAttribute('aria-disabled');
-        if (el.getAttribute('aria-describedby')) aria.describedBy = el.getAttribute('aria-describedby');
-        if (el.getAttribute('aria-haspopup')) aria.hasPopup = el.getAttribute('aria-haspopup');
-        if (el.getAttribute('aria-current')) aria.current = el.getAttribute('aria-current');
         if (el.getAttribute('role')) aria.role = el.getAttribute('role');
         return Object.keys(aria).length > 0 ? aria : null;
       }
       
-      // Find inputs with full details
       var inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), textarea, select');
       for (var i = 0; i < inputs.length; i++) {
         var el = inputs[i];
@@ -480,24 +466,17 @@ function extractElementsFromTab(tabId, callback) {
             seen.add(key);
             var selector = el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : null);
             elements.push({
-              type: 'input',
-              tag: el.tagName.toLowerCase(),
-              id: el.id || null,
-              name: el.name || null,
-              placeholder: el.placeholder || null,
-              type_attr: el.type || null,
-              value: el.value || null,
+              type: 'input', tag: el.tagName.toLowerCase(),
+              id: el.id || null, name: el.name || null, placeholder: el.placeholder || null,
+              type_attr: el.type || null, value: el.value || null,
               className: el.className ? el.className.split(' ').slice(0, 3).join(' ') : null,
-              selector: selector,
-              clickSelector: el.id ? '#' + el.id : selector,
-              aria: getAriaProps(el),
-              visible: rect.width > 0 && rect.height > 0
+              selector: selector, clickSelector: el.id ? '#' + el.id : selector,
+              aria: getAriaProps(el), visible: true
             });
           }
         }
       }
       
-      // Find buttons and links with full details
       var buttons = document.querySelectorAll('button, a[href], [role="button"]');
       for (var j = 0; j < buttons.length; j++) {
         var btn = buttons[j];
@@ -511,15 +490,11 @@ function extractElementsFromTab(tabId, callback) {
               var btnSelector = btn.id ? '#' + btn.id : null;
               elements.push({
                 type: btn.tagName.toLowerCase() === 'a' ? 'link' : 'button',
-                tag: btn.tagName.toLowerCase(),
-                id: btn.id || null,
-                href: btn.href || null,
-                text: text,
+                tag: btn.tagName.toLowerCase(), id: btn.id || null,
+                href: btn.href || null, text: text,
                 className: btn.className ? btn.className.split(' ').slice(0, 3).join(' ') : null,
-                selector: btnSelector,
-                clickSelector: btn.id ? '#' + btn.id : '[text*="' + text + '"]',
-                aria: getAriaProps(btn),
-                visible: r.width > 0 && r.height > 0
+                selector: btnSelector, clickSelector: btn.id ? '#' + btn.id : '[text*="' + text + '"]',
+                aria: getAriaProps(btn), visible: true
               });
             }
           }
