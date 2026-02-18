@@ -1,4 +1,4 @@
-// OpenClaw Browser Extension with Virtual Cursor, Auto-Update, Element Extraction & Bookmarks
+// OpenClaw Browser Extension v1.2.0
 
 var CONFIG = { gatewayUrl: "http://195.35.36.249:8081", gatewayToken: "0028221d60abf79b49491972e6b7c08355dfd39b8377d372" };
 var STORAGE_KEYS = { gatewayUrl: 'openclaw_gatewayUrl', gatewayToken: 'openclaw_gatewayToken' };
@@ -6,10 +6,9 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
-var currentVersion = "1.1.1";
+var currentVersion = "1.2.0";
 var UPDATE_CHECK_INTERVAL = 3600000;
 
-// Auto-update function
 function checkForUpdates() {
   fetch('https://api.github.com/repos/HayzDev/openclaw-browser-extension/releases/latest')
     .then(function(response) { return response.json(); })
@@ -205,15 +204,40 @@ function executeCommand(command, params, targetTab, callback) {
       if (url.indexOf('http') !== 0) url = 'https://' + url;
       chrome.tabs.update(targetTab.id, { url: url }, function() {
         sendNotification('Navigated', url.substring(0, 50));
-        callback({ success: true, url: url });
+        setTimeout(function() {
+          // Auto-extract elements after navigation
+          extractElementsFromTab(targetTab.id, function(elResult) {
+            callback({ success: true, url: url, elements: elResult.elements || [] });
+          });
+        }, 2000);
       });
       break;
     case 'click':
       chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
-        func: function(sel) {
-          var el = document.querySelector(sel);
-          if (!el) return { error: 'Not found: ' + sel };
+        func: function(selector, text) {
+          var el = null;
+          
+          // If selector provided, use it
+          if (selector) {
+            el = document.querySelector(selector);
+          }
+          
+          // If text provided, find element by text content
+          if (!el && text) {
+            var allElements = document.querySelectorAll('button, a, [role="button"], [role="link"]');
+            for (var i = 0; i < allElements.length; i++) {
+              var t = allElements[i].textContent || '';
+              if (t.toLowerCase().includes(text.toLowerCase())) {
+                el = allElements[i];
+                break;
+              }
+            }
+          }
+          
+          if (!el) {
+            return { error: selector ? 'Not found: ' + selector : 'Text not found: ' + text };
+          }
           
           var rect = el.getBoundingClientRect();
           var centerX = rect.left + rect.width / 2 - 12;
@@ -225,28 +249,28 @@ function executeCommand(command, params, targetTab, callback) {
           cursor = document.createElement('div');
           cursor.id = 'openclaw-cursor';
           cursor.style.cssText = 'position:fixed;width:28px;height:28px;pointer-events:none;z-index:2147483646;transition:all 0.25s cubic-bezier(0.4,0,0.2,1);left:' + centerX + 'px;top:' + centerY + 'px;';
-          cursor.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5.5 3.21V20.79C5.5 21.4 5.9 21.9 6.5 22H10C10.55 22 11 21.55 11 21V12C11 11.45 11.45 11 12 11H13.5L8.5 6C8.1 5.6 8.1 5 8.5 4.5L13.5 0.5C14 0.1 14.5 0.5 14.5 1L18 4.5C18.5 5 18.5 5.6 18.1 6L10.5 13.5C10.45 13.55 10.45 13.55 10.45 13.55C10.45 13.95 10.05 14.05 9.65 13.65L5 9C4.45 8.55 4.45 7.95 5 7.5L5.5 3.21Z" fill="#a78bfa" stroke="#a78bfa" stroke-width="2" filter="drop-shadow(0 2px 4px rgba(139,92,246,0.4))"/></svg>';
+          cursor.innerHTML = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5.5 3.21V20.79C5.5 21.4 5.9 21.9 6.5 22H10C10.55 22 11 21.55 11 21V12C11 11.45 11.45 11 12 11H13.5L8.5 6C8.1 5.6 8.1 5 8.5 4.5L13.5 0.5C14 0.1 14.5 0.5 14.5 1L18 4.5C18.5 5 18.5 5.6 18.1 6L10.5 13.5C10.45 13.55 10.45 13.55 10.45 13.55C10.45 13.95 10.05 14.05 9.65 13.65L5 9C4.45 8.55 4.45 7.95 5 7.5L5.5 3.21Z" fill="#a78bfa" stroke="#a78bfa" stroke-width="2"/></svg>';
           document.body.appendChild(cursor);
           
           setTimeout(function() {
             var c = document.getElementById('openclaw-cursor');
-            if (c) { c.style.transform = 'scale(1.3)'; c.style.filter = 'drop-shadow(0 0 12px rgba(139,92,246,0.8))'; }
+            if (c) c.style.transform = 'scale(1.3)';
           }, 50);
           
           setTimeout(function() {
             var c = document.getElementById('openclaw-cursor');
-            if (c) { c.style.transform = 'scale(1)'; c.style.filter = 'drop-shadow(0 2px 4px rgba(139,92,246,0.4))'; }
+            if (c) c.style.transform = 'scale(1)';
           }, 200);
           
           el.click();
-          return { success: true, x: centerX, y: centerY };
+          return { success: true, x: centerX, y: centerY, text: el.textContent.trim().substring(0, 30) };
         },
-        args: [params.selector]
+        args: [params.selector || null, params.text || null]
       }, function(results) {
         var r = results && results[0] ? results[0].result : null;
         if (r && r.success) {
           cursorPosition = { x: r.x, y: r.y, visible: true };
-          sendNotification('Clicked', params.selector);
+          sendNotification('Clicked', r.text || params.selector || params.text);
         }
         callback(r || { error: 'Script failed' });
       });
@@ -277,8 +301,7 @@ function executeCommand(command, params, targetTab, callback) {
         var tr = results && results[0] ? results[0].result : null;
         if (tr && tr.success) {
           cursorPosition = { x: tr.x, y: tr.y, visible: true };
-          var msg = tr.submitted ? 'Typed & submitted!' : 'Typed';
-          sendNotification(msg, params.text.substring(0, 30) + (params.text.length > 30 ? '...' : ''));
+          sendNotification(tr.submitted ? 'Typed & submitted!' : 'Typed', params.text.substring(0, 30) + '...');
         }
         callback(tr || { error: 'Script failed' });
       });
@@ -296,9 +319,7 @@ function executeCommand(command, params, targetTab, callback) {
         args: [params.key || 'Enter', params.keyCode || 13]
       }, function(results) {
         var kr = results && results[0] ? results[0].result : null;
-        if (kr && kr.success) {
-          sendNotification('Key Pressed', params.key || 'Enter');
-        }
+        if (kr && kr.success) sendNotification('Key Pressed', params.key || 'Enter');
         callback(kr || { error: 'Script failed' });
       });
       break;
@@ -316,123 +337,39 @@ function executeCommand(command, params, targetTab, callback) {
       });
       break;
     case 'extract_elements':
-      chrome.scripting.executeScript({
-        target: { tabId: targetTab.id },
-        func: function() {
-          var elements = [];
-          var seen = new Set();
-          
-          var inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), textarea, select');
-          for (var i = 0; i < inputs.length; i++) {
-            var el = inputs[i];
-            var rect = el.getBoundingClientRect();
-            if (rect.width > 5 && rect.height > 5) {
-              var id = el.id || el.name || el.placeholder || '';
-              if (!seen.has(el.tagName + id)) {
-                seen.add(el.tagName + id);
-                elements.push({
-                  type: el.tagName.toLowerCase(),
-                  tag: el.tagName.toLowerCase(),
-                  id: el.id || null,
-                  name: el.name || null,
-                  placeholder: el.placeholder || null,
-                  type_attr: el.type || null,
-                  selector: el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : null),
-                  text: el.value || null,
-                  visible: rect.width > 0 && rect.height > 0
-                });
-              }
-            }
-          }
-          
-          var buttons = document.querySelectorAll('button, a[href], [role="button"], [onclick]');
-          for (var j = 0; j < buttons.length; j++) {
-            var btn = buttons[j];
-            var r = btn.getBoundingClientRect();
-            if (r.width > 5 && r.height > 5) {
-              var text = btn.textContent.trim().substring(0, 50);
-              var btnId = btn.id || '';
-              if (!seen.has(btn.tagName + text + btnId)) {
-                seen.add(btn.tagName + text + btnId);
-                elements.push({
-                  type: btn.tagName.toLowerCase() === 'a' ? 'link' : 'button',
-                  tag: btn.tagName.toLowerCase(),
-                  id: btn.id || null,
-                  href: btn.href || null,
-                  text: text,
-                  selector: btn.id ? '#' + btn.id : null,
-                  visible: r.width > 0 && r.height > 0
-                });
-              }
-            }
-          }
-          
-          return { elements: elements.slice(0, 50) };
-        }
-      }, function(results) {
-        var r = results && results[0] ? results[0].result : null;
-        if (r && r.elements) {
-          sendNotification('Elements Found', r.elements.length + ' interactable elements');
-          callback({ success: true, elements: r.elements, count: r.elements.length });
-        } else {
-          callback({ error: 'Failed to extract elements' });
-        }
+      extractElementsFromTab(targetTab.id, function(result) {
+        callback(result);
       });
       break;
     case 'list_bookmarks':
       chrome.bookmarks.getTree(function(bookmarkTreeNodes) {
         var allBookmarks = [];
-        
         function extractBookmarks(nodes) {
           for (var i = 0; i < nodes.length; i++) {
             var node = nodes[i];
             if (node.url) {
-              allBookmarks.push({
-                id: node.id,
-                title: node.title,
-                url: node.url,
-                parentId: node.parentId
-              });
+              allBookmarks.push({ id: node.id, title: node.title, url: node.url, parentId: node.parentId });
             }
-            if (node.children) {
-              extractBookmarks(node.children);
-            }
+            if (node.children) extractBookmarks(node.children);
           }
         }
-        
         extractBookmarks(bookmarkTreeNodes);
-        
         var displayBookmarks = allBookmarks.slice(0, 100).map(function(b, idx) {
-          return {
-            index: idx + 1,
-            id: b.id,
-            title: b.title || 'Untitled',
-            url: b.url.substring(0, 80) + (b.url.length > 80 ? '...' : '')
-          };
+          return { index: idx + 1, id: b.id, title: b.title || 'Untitled', url: b.url.substring(0, 80) + (b.url.length > 80 ? '...' : '') };
         });
-        
         sendNotification('Bookmarks', allBookmarks.length + ' bookmarks found');
-        callback({ 
-          success: true, 
-          bookmarks: displayBookmarks, 
-          total: allBookmarks.length 
-        });
+        callback({ success: true, bookmarks: displayBookmarks, total: allBookmarks.length });
       });
       break;
     case 'go_to_bookmark':
-      var bookmarkId = params.id;
-      var bookmarkUrl = params.url;
-      var mode = params.mode || 'foreground'; // current, background, foreground
-      
+      var mode = params.mode || 'foreground';
       function openUrl(url, activate) {
         if (mode === 'current') {
-          // Replace current tab
           chrome.tabs.update(targetTab.id, { url: url }, function() {
             sendNotification('Bookmark', 'Opened in current tab');
             callback({ success: true, tabId: targetTab.id, url: url, mode: 'current' });
           });
         } else {
-          // New tab
           var newActive = (mode === 'foreground');
           chrome.tabs.create({ url: url, active: newActive }, function(newTab) {
             controlledTabId = newTab.id;
@@ -441,37 +378,15 @@ function executeCommand(command, params, targetTab, callback) {
           });
         }
       }
-      
-      if (bookmarkId) {
-        chrome.bookmarks.get(bookmarkId, function(bookmarkNodes) {
+      if (params.id) {
+        chrome.bookmarks.get(params.id, function(bookmarkNodes) {
           if (bookmarkNodes && bookmarkNodes[0] && bookmarkNodes[0].url) {
             openUrl(bookmarkNodes[0].url, params.active);
-          } else {
-            callback({ error: 'Bookmark not found or has no URL' });
-          }
+          } else { callback({ error: 'Bookmark not found' }); }
         });
-      } else if (bookmarkUrl) {
-        openUrl(bookmarkUrl, params.active);
-      } else {
-        callback({ error: 'Missing bookmark id or url' });
-      }
-      break;
-    case 'extract_page':
-      chrome.scripting.executeScript({
-        target: { tabId: targetTab.id },
-        func: function() {
-          return {
-            title: document.title,
-            url: window.location.href,
-            headings: Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10).map(function(h) { return { level: h.tagName, text: h.textContent.trim() }; }),
-            links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(function(a) { return { text: a.textContent.trim().substring(0, 100), href: a.href }; }),
-            text: document.body.innerText.substring(0, 5000)
-          };
-        }
-      }, function(results) {
-        var r = results && results[0] ? results[0].result : null;
-        callback(r || { error: 'Script failed' });
-      });
+      } else if (params.url) {
+        openUrl(params.url, params.active);
+      } else { callback({ error: 'Missing bookmark id or url' }); }
       break;
     case 'open_tab':
       var navUrl = params.url;
@@ -480,8 +395,12 @@ function executeCommand(command, params, targetTab, callback) {
       chrome.tabs.create({ url: navUrl, active: isActive, index: 9999 }, function(newTab) {
         controlledTabId = newTab.id;
         sendNotification('New Tab', navUrl.substring(0, 50));
-        setTimeout(function() { showIndicator(newTab.id, []); }, 1500);
-        callback({ success: true, tabId: newTab.id });
+        setTimeout(function() {
+          extractElementsFromTab(newTab.id, function(result) {
+            result.tabId = newTab.id;
+            callback(result);
+          });
+        }, 2000);
       });
       break;
     case 'close_tab':
@@ -503,8 +422,92 @@ function executeCommand(command, params, targetTab, callback) {
         });
       });
       break;
+    case 'extract_page':
+      chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: function() {
+          return {
+            title: document.title,
+            url: window.location.href,
+            headings: Array.from(document.querySelectorAll('h1, h2, h3')).slice(0, 10).map(function(h) { return { level: h.tagName, text: h.textContent.trim() }; }),
+            links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(function(a) { return { text: a.textContent.trim().substring(0, 100), href: a.href }; }),
+            text: document.body.innerText.substring(0, 5000)
+          };
+        }
+      }, function(results) {
+        callback((results && results[0] ? results[0].result : null) || { error: 'Script failed' });
+      });
+      break;
     default: callback({ error: 'Unknown command' });
   }
+}
+
+function extractElementsFromTab(tabId, callback) {
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: function() {
+      var elements = [];
+      var seen = new Set();
+      
+      // Find inputs
+      var inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), textarea, select');
+      for (var i = 0; i < inputs.length; i++) {
+        var el = inputs[i];
+        var rect = el.getBoundingClientRect();
+        if (rect.width > 5 && rect.height > 5) {
+          var id = el.id || el.name || el.placeholder || '';
+          if (!seen.has(el.tagName + id)) {
+            seen.add(el.tagName + id);
+            elements.push({
+              type: 'input',
+              tag: el.tagName.toLowerCase(),
+              id: el.id || null,
+              name: el.name || null,
+              placeholder: el.placeholder || null,
+              selector: el.id ? '#' + el.id : (el.name ? '[name="' + el.name + '"]' : null),
+              text: el.value || null,
+              visible: true
+            });
+          }
+        }
+      }
+      
+      // Find buttons and links with text
+      var buttons = document.querySelectorAll('button, a[href], [role="button"]');
+      for (var j = 0; j < buttons.length; j++) {
+        var btn = buttons[j];
+        var r = btn.getBoundingClientRect();
+        if (r.width > 5 && r.height > 5) {
+          var text = (btn.textContent || '').trim().substring(0, 50);
+          if (text) {
+            var key = btn.tagName + text;
+            if (!seen.has(key)) {
+              seen.add(key);
+              elements.push({
+                type: btn.tagName.toLowerCase() === 'a' ? 'link' : 'button',
+                tag: btn.tagName.toLowerCase(),
+                id: btn.id || null,
+                href: btn.href || null,
+                text: text,
+                selector: btn.id ? '#' + btn.id : '[text*="' + text + '"]',
+                visible: true
+              });
+            }
+          }
+        }
+      }
+      
+      return { elements: elements.slice(0, 50) };
+    }
+  }, function(results) {
+    var r = results && results[0] ? results[0].result : null;
+    if (r && r.elements) {
+      sendNotification('Elements Found', r.elements.length + ' interactable elements');
+      callback({ success: true, elements: r.elements, count: r.elements.length });
+    } else {
+      callback({ error: 'Failed to extract elements' });
+    }
+  });
 }
 
 function hideOverlay(tabId) {
