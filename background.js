@@ -1,4 +1,4 @@
-// OpenClaw Browser Extension with Virtual Cursor, Auto-Update & Element Extraction
+// OpenClaw Browser Extension with Virtual Cursor, Auto-Update, Element Extraction & Bookmarks
 
 var CONFIG = { gatewayUrl: "http://195.35.36.249:8081", gatewayToken: "0028221d60abf79b49491972e6b7c08355dfd39b8377d372" };
 var STORAGE_KEYS = { gatewayUrl: 'openclaw_gatewayUrl', gatewayToken: 'openclaw_gatewayToken' };
@@ -6,7 +6,7 @@ var isConnected = false, pollInterval = null;
 var controlledTabId = null;
 var recentCommands = [];
 var cursorPosition = { x: 0, y: 0, visible: false };
-var currentVersion = "1.0.2";
+var currentVersion = "1.1.0";
 var UPDATE_CHECK_INTERVAL = 3600000;
 
 // Auto-update function
@@ -192,7 +192,8 @@ function getStatusMessage(command) {
     'get_title': 'Getting title...', 'get_tabs': 'Listing tabs...',
     'open_tab': 'Opening tab...', 'close_tab': 'Closing tab...',
     'activate_tab': 'Switching tab...', 'extract_page': 'Extracting...',
-    'extract_elements': 'Finding elements...'
+    'extract_elements': 'Finding elements...', 'list_bookmarks': 'Listing bookmarks...',
+    'go_to_bookmark': 'Opening bookmark...'
   };
   return messages[command] || 'Processing...';
 }
@@ -321,7 +322,6 @@ function executeCommand(command, params, targetTab, callback) {
           var elements = [];
           var seen = new Set();
           
-          // Find inputs
           var inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), textarea, select');
           for (var i = 0; i < inputs.length; i++) {
             var el = inputs[i];
@@ -345,7 +345,6 @@ function executeCommand(command, params, targetTab, callback) {
             }
           }
           
-          // Find buttons and links
           var buttons = document.querySelectorAll('button, a[href], [role="button"], [onclick]');
           for (var j = 0; j < buttons.length; j++) {
             var btn = buttons[j];
@@ -379,6 +378,74 @@ function executeCommand(command, params, targetTab, callback) {
           callback({ error: 'Failed to extract elements' });
         }
       });
+      break;
+    case 'list_bookmarks':
+      chrome.bookmarks.getTree(function(bookmarkTreeNodes) {
+        var allBookmarks = [];
+        
+        function extractBookmarks(nodes) {
+          for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            if (node.url) {
+              allBookmarks.push({
+                id: node.id,
+                title: node.title,
+                url: node.url,
+                parentId: node.parentId
+              });
+            }
+            if (node.children) {
+              extractBookmarks(node.children);
+            }
+          }
+        }
+        
+        extractBookmarks(bookmarkTreeNodes);
+        
+        // Filter to first 100 bookmarks for response size
+        var displayBookmarks = allBookmarks.slice(0, 100).map(function(b, idx) {
+          return {
+            index: idx + 1,
+            id: b.id,
+            title: b.title || 'Untitled',
+            url: b.url.substring(0, 80) + (b.url.length > 80 ? '...' : '')
+          };
+        });
+        
+        sendNotification('Bookmarks', allBookmarks.length + ' bookmarks found');
+        callback({ 
+          success: true, 
+          bookmarks: displayBookmarks, 
+          total: allBookmarks.length 
+        });
+      });
+      break;
+    case 'go_to_bookmark':
+      var bookmarkId = params.id;
+      var bookmarkUrl = params.url;
+      
+      if (bookmarkId) {
+        chrome.bookmarks.get(bookmarkId, function(bookmarkNodes) {
+          if (bookmarkNodes && bookmarkNodes[0] && bookmarkNodes[0].url) {
+            var url = bookmarkNodes[0].url;
+            chrome.tabs.create({ url: url, active: params.active !== false }, function(newTab) {
+              controlledTabId = newTab.id;
+              sendNotification('Bookmark Opened', bookmarkNodes[0].title);
+              callback({ success: true, tabId: newTab.id, url: url, title: bookmarkNodes[0].title });
+            });
+          } else {
+            callback({ error: 'Bookmark not found or has no URL' });
+          }
+        });
+      } else if (bookmarkUrl) {
+        chrome.tabs.create({ url: bookmarkUrl, active: params.active !== false }, function(newTab) {
+          controlledTabId = newTab.id;
+          sendNotification('Bookmark Opened', bookmarkUrl);
+          callback({ success: true, tabId: newTab.id, url: bookmarkUrl });
+        });
+      } else {
+        callback({ error: 'Missing bookmark id or url' });
+      }
       break;
     case 'extract_page':
       chrome.scripting.executeScript({
